@@ -1,0 +1,45 @@
+name: Update CF preferred IPs
+
+on:
+  schedule:
+    # GitHub cron 最小间隔 5 分钟，但实际调度常有延迟；每 30 分钟跑一次更稳
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-ip
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests aiohttp brotlicffi
+
+      - name: Run cfnb scanner
+        run: |
+          cp config.actions.json config.json
+          python main.py
+
+      - name: Commit ip.txt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ip.txt
+          if git diff --staged --quiet; then
+            echo "ip.txt 无变化，跳过提交"
+          else
+            git commit -m "update cfdata results ($(date -u '+%Y-%m-%d %H:%M') UTC)"
+            git push
+          fi
