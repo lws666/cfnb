@@ -1,10 +1,10 @@
 {
     "_comment": "Cloudflare IP 优选工具配置文件 - 请根据需求修改下方参数",
-    "USE_GLOBAL_MODE": true,
+    "USE_GLOBAL_MODE": false,
     "_comment_USE_GLOBAL_MODE": "true=全局最优15个；false=每个国家最优1个",
     "GLOBAL_TOP_N": 30,
     "_comment_GLOBAL_TOP_N": "全局模式下最终保留的节点数量",
-    "PER_COUNTRY_TOP_N": 1,
+    "PER_COUNTRY_TOP_N": 8,
     "_comment_PER_COUNTRY_TOP_N": "分国家模式下每个国家保留的节点数量",
     "BANDWIDTH_CANDIDATES": 150,
     "_comment_BANDWIDTH_CANDIDATES": "进入带宽测速的候选节点数（从TCP通过者中选取前N个）",
