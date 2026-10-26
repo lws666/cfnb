@@ -1117,10 +1117,6 @@ def test_node(node_str):
     ip, port, country = m.groups()
     min_lat, success = test_tcp_latency(ip, port)
     if success == 0 or (success / TCP_PROBES) < MIN_SUCCESS_RATE:
-        # IPv6 fallback: probe host may lack IPv6 egress (common on cloud hosts).
-        # Keep the node with an optimistic latency so clients with IPv6 can still use it.
-        if ip.startswith('['):
-            return (node_str, 999.0, country, 1)
         return None
     return (node_str, min_lat, country, success)
 
@@ -1231,10 +1227,6 @@ def availability_filter_candidates(candidates):
         for future in as_completed(futures):
             completed += 1
             node_str, ok, stack, exit_info = future.result()
-            # The availability API only understands IPv4 proxy targets, so IPv6
-            # candidates would be dropped here despite passing the local TCP probe.
-            if not ok and node_str.split(':')[0].startswith('['):
-                ok = True
             if ok:
                 passed.append(node_str)
                 ip_info[node_str] = stack
@@ -1303,11 +1295,6 @@ def http_server_filter(candidates, config):
             for future in as_completed(future_map):
                 node_str, valid, server, http_lat, http_jitter = future.result()
                 completed += 1
-                # Hosts without IPv6 egress cannot HTTP-probe IPv6 targets; keep them
-                # anyway so dual-stack clients can still use the node.
-                if not valid and node_str.split(':')[0].startswith('['):
-                    valid = True
-                    http_lat, http_jitter = 999.0, 0.0
                 if valid:
                     passed.append(node_str)
                     http_latency_map[node_str] = http_lat
@@ -1421,10 +1408,6 @@ def bandwidth_filter(candidates):
             node, speed = future.result()
             if speed > 0:
                 results.append((node, speed))
-            elif node.split(':')[0].startswith('['):
-                # No IPv6 egress on the probe host: keep the node at zero speed so
-                # it still reaches final selection instead of vanishing silently.
-                results.append((node, 0.0))
             now = time.time()
             if now - last_print >= PROGRESS_PRINT_INTERVAL or completed == total:
                 print(f"\r[带宽测速] 进度：{completed}/{total} ({(completed/total)*100:.1f}%)", end="", flush=True)
@@ -1858,10 +1841,6 @@ def main():
                 continue
             if parts[1].split()[0].upper() in allowed_set:
                 filtered_nodes.append(node)
-            elif parts[0].startswith('['):
-                # IPv6 candidates from CF sources carry no country tag; geo-IP on v6
-                # is unreliable, and the client picks by latency anyway. Keep them.
-                filtered_nodes.append(node)
         nodes = filtered_nodes
         after = len(nodes)
         print(f"\n国家过滤（测试前）：{before} -> {after} 个节点（允许国家：{', '.join(allowed_set)}）")
@@ -1977,6 +1956,8 @@ def main():
             score_dict = {item[0]: item[1] for item in scored_nodes}
             final_selected.sort(key=lambda n: score_dict.get(n, 0), reverse=True)
 
+        v4_final = sum(1 for n in final_selected if not n.startswith('['))
+        print(f"\n最终结果：IPv4 {v4_final} 个 / IPv6 {len(final_selected) - v4_final} 个")
         print("\n================ 最终优选节点 ================")
         for i, node in enumerate(final_selected, 1):
             speed = speed_map.get(node, 0)
@@ -2000,7 +1981,9 @@ def main():
                  latency_map=latency_map,
                  http_latency_map=http_latency_map,
                  http_jitter_map=http_jitter_map)
-    print(f"\n结果已保存到 {OUTPUT_FILE}（共 {len(final_selected)} 个节点）")
+    v4_count = sum(1 for n in final_selected if not n.startswith('['))
+    v6_count = len(final_selected) - v4_count
+    print(f"\n结果已保存到 {OUTPUT_FILE}（共 {len(final_selected)} 个节点：IPv4 {v4_count} 个，IPv6 {v6_count} 个）")
 
     ip_list = [node.split(':')[0] for node in final_selected]
 
