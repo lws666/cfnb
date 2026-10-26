@@ -43,8 +43,8 @@ requests.Session.request = _new_session_request
 # ================================================================
 
 # ==================== 预编译正则 ====================
-NODE_PATTERN = re.compile(r"^(\[[0-9a-fA-F:]+\]|\d+\.\d+\.\d+\.\d+):(\d+)#(.+)$")
-IP_PORT_PATTERN = re.compile(r"^(\[[0-9a-fA-F:]+\]|\d+\.\d+\.\d+\.\d+):(\d+)(?:#|$)")
+NODE_PATTERN = re.compile(r"^(\d+\.\d+\.\d+\.\d+):(\d+)#(.+)$")
+IP_PORT_PATTERN = re.compile(r"^(\d+\.\d+\.\d+\.\d+):(\d+)#")
 
 # ==================== 国家代码映射表（全球覆盖）====================
 CN_TO_CODE = {
@@ -606,25 +606,6 @@ def extract_country_code(label):
     return None
 
 
-
-def split_ipport(ipport):
-    """Split 'IP:port' or '[IPv6]:port' into (host, port). IPv6 has colons, so
-    bracketed form must be handled before rsplit to avoid truncating the address."""
-    s = ipport.strip()
-    if s.startswith('['):
-        end = s.rfind(']')
-        host = s[1:end]
-        rest = s[end+1:]
-        port = rest[1:] if rest.startswith(':') else ''
-        return host, port
-    if s.count(':') > 1:
-        # bare IPv6 without brackets and without port
-        return s, ''
-    if ':' in s:
-        h, p = s.rsplit(':', 1)
-        return h, p
-    return s, ''
-
 def _parse_json_nodes(data):
     nodes = []
     if isinstance(data, list):
@@ -692,44 +673,31 @@ def _resolve_countries_batch(ipports):
 
 
 def _parse_text_nodes(text):
-    """Parse one node per line. Sources come in many shapes:
-    - "IP:port#label"
-    - "IP:port#label | alias | HK | IP:port"   (bestcf style, region in a pipe segment)
-    - both IPv4 and bracketed IPv6 keys
-    Line-based parsing matters because the pipe/timestamp tails would otherwise
-    be shredded into separate space-split tokens and misread as node keys.
-    """
     nodes = []
     pending = []
-    seen = set()
 
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#') or line.startswith('//'):
+    tokens = text.split()
+    for token in tokens:
+        pure_match = re.match(r'^(\d+\.\d+\.\d+\.\d+:\d+)$', token)
+        if pure_match:
+            pending.append(pure_match.group(1))
             continue
 
-        key_match = re.match(r'^(\[[0-9a-fA-F:]+\]|\d+\.\d+\.\d+\.\d+):(\d+)', line)
-        if not key_match:
+        if '#' not in token:
             continue
-        ipport = f"{key_match.group(1)}:{key_match.group(2)}"
-        if ipport in seen:
+        try:
+            ipport, label = token.split('#', 1)
+        except ValueError:
             continue
-        seen.add(ipport)
+        ipport = ipport.strip()
+        label = label.strip()
 
-        # region hint: pipe-separated segments after the remark, else the remark itself
-        rest = line[key_match.end():]
-        code = None
-        for seg in rest.split('|'):
-            seg = seg.replace('\u200b', '').strip().lstrip('#').strip()
-            if not seg:
-                continue
-            found = extract_country_code(seg)
-            if found:
-                code = found
-                break
-        if not code:
-            code = extract_country_code(rest.lstrip('#'))
+        if ipport.startswith('['):
+            continue
+        if not re.match(r'^\d+\.\d+\.\d+\.\d+:\d+$', ipport):
+            continue
 
+        code = extract_country_code(label)
         if code:
             nodes.append(f"{ipport}#{code}")
         else:
@@ -912,7 +880,7 @@ def sort_cache_file(cache_file):
         if not line or '#' not in line:
             continue
         ipport, tag = line.split('#', 1)
-        ip_str, _ = split_ipport(ipport)
+        ip_str = ipport.split(':')[0]
         try:
             ip_obj = ipaddress.ip_address(ip_str)
         except ValueError:
@@ -1058,7 +1026,7 @@ def calibrate_regions(nodes, token_file, cache_file):
         new_ips_set = set()
         ip_to_ipports = defaultdict(list)
         for ipport in new_ipports:
-            ip, _ = split_ipport(ipport)
+            ip = ipport.split(':')[0]
             new_ips_set.add(ip)
             ip_to_ipports[ip].append(ipport)
 
@@ -1094,12 +1062,9 @@ def test_tcp_latency(ip, port, timeout=TIMEOUT, probes=TCP_PROBES):
     for _ in range(probes):
         try:
             start = time.time()
-            # IPv6 arrives bracketed from sources; sockets want the bare form
-            _host = ip[1:-1] if ip.startswith('[') else ip
-            _fam = socket.AF_INET6 if ':' in _host else socket.AF_INET
-            with socket.socket(_fam, socket.SOCK_STREAM) as sock:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(timeout)
-                sock.connect((_host, int(port)))
+                sock.connect((ip, int(port)))
             latency = time.time() - start
             if latency > max_latency:
                 max_latency = latency
@@ -1125,9 +1090,7 @@ def check_availability(node_str):
     if not m:
         return (node_str, False, "unknown", {})
     ip, port = m.group(1), m.group(2)
-    # bracketed IPv6 must be unbracketed for socket/requests calls
-    bare_ip = ip[1:-1] if ip.startswith('[') else ip
-    proxyip = f"{bare_ip}:{port}"
+    proxyip = f"{ip}:{port}"
 
     best_stack = "unknown"
     best_exit_info = {}
@@ -1324,9 +1287,6 @@ def measure_bandwidth_curl(node_str):
     if not m:
         return (node_str, 0)
     ip, port = m.group(1), m.group(2)
-    # curl --resolve wants bare IPv6 (no brackets)
-    if ip.startswith('['):
-        ip = ip[1:-1]
     port_int = int(port)
 
     # ---------- 端口与协议的映射 ----------
@@ -1444,7 +1404,7 @@ def batch_update_cloudflare_dns(ip_list, ip_info=None, full_bw_results=None, tar
         ip_set = set()
         for node_str, _ in full_bw_results:
             if ':' in node_str:
-                ip_set.add(split_ipport(node_str)[0])
+                ip_set.add(node_str.split(':')[0])
         if ip_set:
             workers = min(FALLBACK_WORKERS, len(ip_set))
             print(f"正在并发查询 {len(ip_set)} 个 IP 的风险等级（并发 {workers}）...")
@@ -1466,10 +1426,11 @@ def batch_update_cloudflare_dns(ip_list, ip_info=None, full_bw_results=None, tar
         for node_str, speed in full_bw_results:
             if ':' not in node_str:
                 continue
-            pure_ip, _port = split_ipport(node_str.split('#')[0])
-            port = _port or '443'
-            if not pure_ip:
+            parts = node_str.split(':')
+            if len(parts) < 2:
                 continue
+            pure_ip = parts[0]
+            port = parts[1].split('#')[0]
 
             if record_type == "A" and port != '443':
                 filtered_by_port += 1
@@ -1809,7 +1770,7 @@ def main():
 
     if PRE_FILTER_PORT_ENABLED:
         before = len(nodes)
-        nodes = [n for n in nodes if split_ipport(n.split('#')[0])[1] in PRE_FILTER_PORTS]
+        nodes = [n for n in nodes if n.split(':')[1].split('#')[0] in PRE_FILTER_PORTS]
         after = len(nodes)
         ports_display = ', '.join(PRE_FILTER_PORTS)
         print(f"前置端口过滤（仅保留端口 {ports_display}）：{before} -> {after} 个节点")
@@ -1837,9 +1798,7 @@ def main():
         filtered_nodes = []
         for node in nodes:
             parts = node.split('#')
-            if len(parts) != 2:
-                continue
-            if parts[1].split()[0].upper() in allowed_set:
+            if len(parts) == 2 and parts[1].split()[0].upper() in allowed_set:
                 filtered_nodes.append(node)
         nodes = filtered_nodes
         after = len(nodes)
@@ -1956,8 +1915,6 @@ def main():
             score_dict = {item[0]: item[1] for item in scored_nodes}
             final_selected.sort(key=lambda n: score_dict.get(n, 0), reverse=True)
 
-        v4_final = sum(1 for n in final_selected if not n.startswith('['))
-        print(f"\n最终结果：IPv4 {v4_final} 个 / IPv6 {len(final_selected) - v4_final} 个")
         print("\n================ 最终优选节点 ================")
         for i, node in enumerate(final_selected, 1):
             speed = speed_map.get(node, 0)
@@ -1981,9 +1938,7 @@ def main():
                  latency_map=latency_map,
                  http_latency_map=http_latency_map,
                  http_jitter_map=http_jitter_map)
-    v4_count = sum(1 for n in final_selected if not n.startswith('['))
-    v6_count = len(final_selected) - v4_count
-    print(f"\n结果已保存到 {OUTPUT_FILE}（共 {len(final_selected)} 个节点：IPv4 {v4_count} 个，IPv6 {v6_count} 个）")
+    print(f"\n结果已保存到 {OUTPUT_FILE}（共 {len(final_selected)} 个节点）")
 
     ip_list = [node.split(':')[0] for node in final_selected]
 
