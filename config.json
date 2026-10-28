@@ -71,10 +71,6 @@
     "_comment_DNS_RECORD_TYPE": "DNS 记录类型（A 或 TXT）",
     "ADDITIONAL_SOURCES": [
         {
-            "url": "https://raw.githubusercontent.com/lws666/cf/refs/heads/main/ip.txt",
-            "enabled": true
-        },
-        {
             "url": "https://bestcf.pages.dev/xinyitang3/ipv4.txt",
             "enabled": true
         },
