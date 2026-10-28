@@ -568,6 +568,16 @@ def get_ip_risk_level(ip):
         return "极度纯净"
 
 # ==================== 自适应多数据源解析引擎 ====================
+# Airport/city abbreviations commonly used by CF IP list providers.
+# The ISO table above only knows official 3-letter codes (SGP, HKG, ...), so
+# lists labeled "SIN-SG" style would otherwise be dropped entirely.
+CITY_ALIAS_TO_CODE = {
+    'SIN': 'SG', 'HKG': 'HK', 'NRT': 'JP', 'KIX': 'JP', 'ICN': 'KR',
+    'TPE': 'TW', 'LAX': 'US', 'SJC': 'US', 'SEA': 'US', 'IAD': 'US',
+    'EWR': 'US', 'FRA': 'DE', 'AMS': 'NL', 'LHR': 'GB', 'CDG': 'FR',
+    'SYD': 'AU', 'BOM': 'IN', 'DXB': 'AE', 'KUL': 'MY', 'BKK': 'TH',
+}
+
 def extract_country_code(label):
     """从任意标签中提取标准两位国家代码（支持两位代码、三位代码映射、中文名、emoji国旗、混合无关文字）"""
     label = label.strip()
@@ -580,8 +590,12 @@ def extract_country_code(label):
     for token in tokens:
         token_cleaned = re.sub(r'^[\d\s\-_.|#]+', '', token.strip())
         m3 = re.match(r'^([A-Z]{3})(?![A-Za-z])', token_cleaned)
-        if m3 and m3.group(1) in ALPHA3_TO_ALPHA2:
-            return ALPHA3_TO_ALPHA2[m3.group(1)]
+        if m3:
+            code3 = m3.group(1)
+            if code3 in ALPHA3_TO_ALPHA2:
+                return ALPHA3_TO_ALPHA2[code3]
+            if code3 in CITY_ALIAS_TO_CODE:
+                return CITY_ALIAS_TO_CODE[code3]
         m2 = re.match(r'^([A-Z]{2})(?![A-Za-z])', token_cleaned)
         if m2 and m2.group(1) in CODE_SET:
             return m2.group(1)
